@@ -7,6 +7,7 @@
   --muted: #685d4f;
   --accent: #0f766e;
   --accent-strong: #115e59;
+  --accent-secondary: #1d4ed8;
   --warn: #b45309;
   --danger: #b91c1c;
   --shadow: 0 18px 48px rgba(52, 40, 18, 0.12);
@@ -244,7 +245,7 @@ select {
 .primary-button {
   min-height: 48px;
   border-radius: 14px;
-  background: linear-gradient(135deg, var(--accent) 0%, #1d4ed8 100%);
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-secondary) 100%);
   color: #fff;
   font-weight: 700;
 }
