@@ -23,16 +23,50 @@
 - Office 文件会上传到后端，用 LibreOffice headless 转成 PDF 再预览
 - 其它文件类型只显示元信息，不做浏览器内渲染，但仍可提交到 CUPS
 
-## LibreOffice
+## 系统依赖
 
-Office 预览依赖 `soffice`。常见安装方式：
+在 Linux 上运行本项目前，需要先安装以下依赖。
+
+### Node.js
+
+需要 Node.js **18 或更高版本**（项目使用 `fs/promises` 等现代 API）。
 
 ```bash
+# Debian / Ubuntu
 sudo apt-get update
-sudo apt-get install -y libreoffice
+sudo apt-get install -y nodejs npm
+
+# CentOS / RHEL / Fedora
+sudo dnf install -y nodejs npm
 ```
 
-如果二进制不在默认 PATH，可以在 `.env` 里指定：
+> 如果系统仓库里的 Node.js 版本较旧，建议通过 [NodeSource](https://github.com/nodesource/distributions) 或 [nvm](https://github.com/nvm-sh/nvm) 安装新版。
+
+### LibreOffice（可选）
+
+如果你想在浏览器里预览 Office 文件（Word、Excel、PPT 等），需要安装 LibreOffice。纯打印 PDF / 图片可以不装。
+
+LibreOffice 完整安装会带上大量 GUI 依赖，体积很大。如果 web-printer 跑在无桌面环境的服务器上，建议只装 **headless 精简版**，能显著减少磁盘占用。
+
+```bash
+# Debian / Ubuntu（无 GUI 精简版）
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends libreoffice
+
+# CentOS / RHEL / Fedora（headless 版）
+sudo dnf install -y libreoffice-headless
+```
+
+> 如果某些 Office 格式转换失败，说明缺少对应的 filter 组件，可以回退到完整版：
+> ```bash
+> # Debian / Ubuntu 完整版
+> sudo apt-get install -y libreoffice
+>
+> # CentOS / RHEL / Fedora 完整版
+> sudo dnf install -y libreoffice
+> ```
+
+如果 `soffice` 不在默认 PATH，可以在 `.env` 里指定：
 
 ```bash
 SOFFICE_BIN=/usr/bin/soffice
@@ -40,7 +74,7 @@ SOFFICE_BIN=/usr/bin/soffice
 
 ## Run
 
-1. 安装依赖
+1. 安装项目依赖
 
 ```bash
 npm install
