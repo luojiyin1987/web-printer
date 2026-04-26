@@ -7,6 +7,7 @@ const multer = require("multer");
 const { getConfig, redactUrl } = require("./lib/config");
 const { cancelJob, getJobs, listPrinters, printFile } = require("./lib/cups");
 const {
+  cleanupOldPreviews,
   createOfficePreview,
   isSofficeAvailable,
   resolvePreviewFile,
@@ -33,8 +34,37 @@ function asyncRoute(handler) {
   };
 }
 
+function sanitizeCupsString(value, maxLength) {
+  const str = String(value || "").trim();
+  const truncated = str.length > maxLength ? str.slice(0, maxLength) : str;
+  // Strip control characters (except tab, newline, carriage return)
+  return truncated.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
+
+async function cleanupOldUploads(config) {
+  const entries = await fs.readdir(config.uploadDir, { withFileTypes: true });
+  const now = Date.now();
+  const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isFile())
+      .map(async (entry) => {
+        const target = path.join(config.uploadDir, entry.name);
+        try {
+          const stat = await fs.stat(target);
+          if (now - stat.mtimeMs > maxAge) {
+            await fs.rm(target, { force: true });
+          }
+        } catch (_error) {
+          // ignore
+        }
+      })
+  );
+}
+
 app.use(express.json());
-app.use(express.static(path.join(process.cwd(), "public")));
+app.use(express.static(path.join(__dirname, "public")));
 
 app.get(
   "/api/config",
@@ -107,8 +137,8 @@ app.post(
         copies,
         pageRanges,
         originalname: request.file.originalname,
-        jobName: request.body.jobName,
-        requestingUser: request.body.requestingUser,
+        jobName: sanitizeCupsString(request.body.jobName, 128),
+        requestingUser: sanitizeCupsString(request.body.requestingUser, 64),
       });
 
       response.status(201).json({
@@ -154,6 +184,23 @@ app.use((error, _request, response, _next) => {
 async function start() {
   await fs.mkdir(config.uploadDir, { recursive: true });
   await fs.mkdir(config.previewDir, { recursive: true });
+
+  await cleanupOldUploads(config).catch((error) => {
+    console.error("Failed to clean up old uploads:", error);
+  });
+  await cleanupOldPreviews(config).catch((error) => {
+    console.error("Failed to clean up old previews:", error);
+  });
+
+  // Periodic cleanup every 10 minutes
+  setInterval(() => {
+    cleanupOldUploads(config).catch((error) => {
+      console.error("Periodic upload cleanup failed:", error);
+    });
+    cleanupOldPreviews(config).catch((error) => {
+      console.error("Periodic preview cleanup failed:", error);
+    });
+  }, 10 * 60 * 1000);
 
   app.listen(config.port, config.host, () => {
     console.log(

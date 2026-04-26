@@ -159,9 +159,9 @@ function renderPreview(file) {
   }
 
   revokePreviewUrl();
-  state.previewUrl = URL.createObjectURL(file);
 
   if (file.type === "application/pdf") {
+    state.previewUrl = URL.createObjectURL(file);
     dom.previewPanel.innerHTML = `
       <iframe
         class="preview-frame"
@@ -173,6 +173,7 @@ function renderPreview(file) {
   }
 
   if (file.type.startsWith("image/")) {
+    state.previewUrl = URL.createObjectURL(file);
     dom.previewPanel.innerHTML = `
       <div class="preview-image-wrap">
         <img class="preview-image" src="${escapeHtml(state.previewUrl)}" alt="${escapeHtml(
@@ -184,7 +185,6 @@ function renderPreview(file) {
   }
 
   if (isOfficeDocument(file)) {
-    revokePreviewUrl();
     renderOfficePreview(file).catch(handleError);
     return;
   }
