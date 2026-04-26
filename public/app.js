@@ -395,7 +395,6 @@ async function submitPrint(event) {
       }`
     );
     dom.printForm.reset();
-    document.querySelector("#copies").value = "1";
     syncPrintOptions();
     clearPreview("选择文件后，这里会显示预览。");
     await loadJobs();
