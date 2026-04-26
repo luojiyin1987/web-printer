@@ -110,6 +110,59 @@ npm start
 http://0.0.0.0:3000
 ```
 
+## Docker 部署
+
+项目已包含 Dockerfile，可直接构建镜像运行，无需在宿主机安装 Node.js / LibreOffice。
+
+### 构建镜像
+
+```bash
+docker build -t web-printer:latest .
+```
+
+### 运行容器
+
+先准备好 `.env` 文件（参考 `.env.example`），然后通过 `--env-file` 挂载：
+
+```bash
+docker run -d \
+  --name web-printer \
+  --env-file .env \
+  -p 3000:3000 \
+  --restart unless-stopped \
+  web-printer:latest
+```
+
+如果需要调整端口映射，把 `-p 3000:3000` 改成 `-p <宿主机端口>:3000`。
+
+### Docker Compose（推荐）
+
+`docker-compose.yml` 示例：
+
+```yaml
+services:
+  web-printer:
+    build: .
+    container_name: web-printer
+    env_file: .env
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/config', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+```
+
+启动：
+
+```bash
+docker compose up -d
+```
+
+> 镜像内置了 LibreOffice headless 和常用中文字体（Noto CJK），可直接预览 Office 文件。
+
 ## Scripts
 
 启动服务：

@@ -1,0 +1,15 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.env
+README.md
+*.md
+!LICENSE.md
+tmp-uploads
+tmp-previews
+scripts
+.agents
+.claude
+.env.example
+package-lock.json
