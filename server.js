@@ -10,6 +10,7 @@ const {
   cleanupOldPreviews,
   createOfficePreview,
   isSofficeAvailable,
+  OFFICE_EXTENSIONS,
   resolvePreviewFile,
 } = require("./lib/preview");
 const {
@@ -72,6 +73,7 @@ app.get(
     response.json({
       cupsServer: redactUrl(config.cupsServerUrl),
       officePreviewAvailable: await isSofficeAvailable(config),
+      officeExtensions: OFFICE_EXTENSIONS,
     });
   })
 );

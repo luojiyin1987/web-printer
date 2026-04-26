@@ -3,6 +3,7 @@ const state = {
   selectedPrinter: null,
   previewUrl: null,
   officePreviewAvailable: false,
+  officeExtensions: [],
   previewToken: 0,
 };
 
@@ -85,9 +86,13 @@ function clearPreview(message) {
   dom.previewPanel.innerHTML = `<div class="empty-state">${escapeHtml(message)}</div>`;
 }
 
-function getFileExtension(fileName) {
-  const parts = String(fileName || "").toLowerCase().split(".");
-  return parts.length > 1 ? `.${parts.pop()}` : "";
+function getExtension(fileName) {
+  const name = String(fileName || "");
+  const dotIndex = name.lastIndexOf(".");
+  if (dotIndex <= 0) {
+    return "";
+  }
+  return name.slice(dotIndex).toLowerCase();
 }
 
 function isOfficeDocument(file) {
@@ -95,18 +100,7 @@ function isOfficeDocument(file) {
     return false;
   }
 
-  return [
-    ".doc",
-    ".docx",
-    ".ppt",
-    ".pptx",
-    ".xls",
-    ".xlsx",
-    ".odt",
-    ".ods",
-    ".odp",
-    ".rtf",
-  ].includes(getFileExtension(file.name));
+  return state.officeExtensions.includes(getExtension(file.name));
 }
 
 async function renderOfficePreview(file) {
@@ -334,6 +328,9 @@ async function loadConfig() {
   const payload = await requestJson("/api/config");
   dom.cupsServer.textContent = payload.cupsServer;
   state.officePreviewAvailable = Boolean(payload.officePreviewAvailable);
+  state.officeExtensions = Array.isArray(payload.officeExtensions)
+    ? payload.officeExtensions
+    : [];
 }
 
 async function loadPrinters() {
