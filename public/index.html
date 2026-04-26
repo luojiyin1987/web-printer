@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Web Printer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">REMOTE CUPS BRIDGE</p>
+        <h1>局域网打印入口</h1>
+        <p class="lead">
+          这个 Web UI 连接远程 CUPS 服务器，列出共享打印机，并把文件直接提交到目标队列。
+        </p>
+        <div class="status-grid">
+          <article class="status-card">
+            <span class="status-label">CUPS Server</span>
+            <strong id="cups-server">loading...</strong>
+          </article>
+          <article class="status-card">
+            <span class="status-label">Available Printers</span>
+            <strong id="printer-count">-</strong>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <h2>打印机</h2>
+          <button id="refresh-printers" class="ghost-button" type="button">
+            刷新
+          </button>
+        </div>
+        <div id="printer-list" class="printer-list"></div>
+      </section>
+
+      <section class="layout">
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>提交打印</h2>
+          </div>
+          <form id="print-form" class="print-form">
+            <label>
+              <span>目标打印机</span>
+              <select id="printer-select" name="printerName" required></select>
+            </label>
+            <label>
+              <span>任务名</span>
+              <input
+                id="job-name"
+                name="jobName"
+                type="text"
+                placeholder="默认使用文件名"
+              />
+            </label>
+            <label>
+              <span>提交用户</span>
+              <input
+                id="requesting-user"
+                name="requestingUser"
+                type="text"
+                placeholder="web-printer"
+              />
+            </label>
+            <label>
+              <span>份数</span>
+              <input
+                id="copies"
+                name="copies"
+                type="number"
+                min="1"
+                max="999"
+                value="1"
+              />
+            </label>
+            <label>
+              <span>打印范围</span>
+              <input
+                id="page-ranges"
+                name="pageRanges"
+                type="text"
+                placeholder="例如 1-3,5,8-10"
+              />
+            </label>
+            <p class="field-hint">
+              留空表示全部页面。当前预览优先支持 PDF 和图片；其他格式仍可直接打印。
+            </p>
+            <label class="file-input">
+              <span>文件</span>
+              <input id="document" name="document" type="file" required />
+            </label>
+            <button id="submit-button" class="primary-button" type="submit">
+              提交打印
+            </button>
+          </form>
+          <p id="print-message" class="message" role="status"></p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>内容预览</h2>
+          </div>
+          <div id="preview-panel" class="preview-panel">
+            <div class="empty-state">
+              选择文件后，这里会显示预览。PDF 会以内嵌方式展示，图片直接显示。
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>队列任务</h2>
+            <button id="refresh-jobs" class="ghost-button" type="button">
+              刷新
+            </button>
+          </div>
+          <div id="job-list" class="job-list"></div>
+        </section>
+      </section>
+    </main>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
