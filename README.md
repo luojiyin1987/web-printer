@@ -135,6 +135,8 @@ docker run -d \
 
 如果需要调整端口映射，把 `-p 3000:3000` 改成 `-p <宿主机端口>:3000`。
 
+`CUPS_SERVER_URL` 是必填项；如果没配置，服务会在启动时直接失败，而不是回退到本机 `127.0.0.1:631`。
+
 ### Docker Compose（推荐）
 
 `docker-compose.yml` 示例：
@@ -149,7 +151,7 @@ services:
       - "3000:3000"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/config', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/printers', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -162,6 +164,7 @@ docker compose up -d
 ```
 
 > 镜像内置了 LibreOffice headless 和常用中文字体（Noto CJK），可直接预览 Office 文件。
+> `/api/config` 在探测 LibreOffice 异常时会降级为“不可预览”，不会阻塞整个 Web UI 初始化。
 
 ## Scripts
 
