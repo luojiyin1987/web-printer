@@ -395,6 +395,7 @@ async function submitPrint(event) {
       }`
     );
     dom.printForm.reset();
+    renderPrinterSelect();
     syncPrintOptions();
     clearPreview("选择文件后，这里会显示预览。");
     await loadJobs();
@@ -434,6 +435,7 @@ dom.refreshJobs.addEventListener("click", () => {
 
 dom.printerSelect.addEventListener("change", () => {
   state.selectedPrinter = dom.printerSelect.value;
+  renderPrinterSelect();
   renderPrinters();
   syncPrintOptions();
   loadJobs().catch(handleError);
