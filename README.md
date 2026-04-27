@@ -120,6 +120,9 @@ http://0.0.0.0:3000
 docker build -t web-printer:latest .
 ```
 
+当前 Dockerfile 使用 `npm ci`，依赖 `package.json` 和 `package-lock.json` 一起参与构建。
+如果后续改用 `pnpm`、`yarn` 或其他包管理器，需要同时更新对应的 lockfile 以及 Dockerfile 里的安装命令；否则镜像构建可能失败，或者装出的依赖版本与本地不一致。
+
 ### 运行容器
 
 先准备好 `.env` 文件（参考 `.env.example`），然后通过 `--env-file` 挂载：
