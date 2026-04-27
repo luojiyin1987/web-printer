@@ -177,6 +177,14 @@ npm start
 npm run smoke
 ```
 
+Git hooks 由 Husky 在 `npm install` 后自动安装。手动执行提交前检查：
+
+```bash
+npm run precommit -- --all-files
+```
+
+> 提交前 hook 会检查常见问题，例如 JSON / YAML 语法、行尾格式、冲突标记、私钥误提交和超大文件。
+
 ## Remote CUPS Requirements
 
 远程 CUPS 服务器至少要满足下面几点：
