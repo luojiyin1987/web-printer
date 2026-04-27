@@ -12,4 +12,4 @@ scripts
 .agents
 .claude
 .env.example
-package-lock.json
+
