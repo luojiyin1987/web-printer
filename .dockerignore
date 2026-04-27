@@ -4,7 +4,7 @@ npm-debug.log
 .gitignore
 .env
 README.md
-*.md
+**/*.md
 !LICENSE.md
 tmp-uploads
 tmp-previews
@@ -12,4 +12,3 @@ scripts
 .agents
 .claude
 .env.example
-
