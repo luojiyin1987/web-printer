@@ -67,13 +67,28 @@ async function cleanupOldUploads(config) {
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
+async function getOfficePreviewConfig() {
+  try {
+    return {
+      officePreviewAvailable: await isSofficeAvailable(config),
+      officeExtensions: OFFICE_EXTENSIONS,
+    };
+  } catch (error) {
+    console.error("Failed to probe LibreOffice availability:", error);
+    return {
+      officePreviewAvailable: false,
+      officeExtensions: OFFICE_EXTENSIONS,
+    };
+  }
+}
+
 app.get(
   "/api/config",
   asyncRoute(async (_request, response) => {
+    const officePreviewConfig = await getOfficePreviewConfig();
     response.json({
       cupsServer: redactUrl(config.cupsServerUrl),
-      officePreviewAvailable: await isSofficeAvailable(config),
-      officeExtensions: OFFICE_EXTENSIONS,
+      ...officePreviewConfig,
     });
   })
 );
