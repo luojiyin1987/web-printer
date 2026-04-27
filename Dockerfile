@@ -16,8 +16,8 @@ RUN soffice --version
 WORKDIR /app
 
 # Copy dependency manifests first to leverage Docker layer caching
-COPY package.json ./
-RUN npm install --omit=dev
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 # Copy application source
 COPY . .
@@ -32,8 +32,8 @@ USER printer
 
 EXPOSE 3000
 
-# Health check against the config endpoint
+# Health check verifies the app can also reach the configured CUPS server.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD node -e "require('http').get('http://localhost:3000/api/config', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+    CMD node -e "require('http').get('http://localhost:3000/api/printers', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
 CMD ["npm", "start"]
