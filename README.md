@@ -185,6 +185,8 @@ npm run precommit -- --all-files
 
 > 提交前 hook 会检查常见问题，例如 JSON / YAML 语法、行尾格式、冲突标记、私钥误提交和超大文件。
 
+> 仓库根目录的 `.pre-commit-config.yaml` 保留给 GitHub 上的 `pre-commit.ci` 使用；本地开发默认不需要安装 Python `pre-commit`。
+
 ## Remote CUPS Requirements
 
 远程 CUPS 服务器至少要满足下面几点：
