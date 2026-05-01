@@ -8,7 +8,7 @@
     "smoke": "node scripts/smoke-test.mjs",
     "test": "npm run smoke",
     "precommit": "node scripts/pre-commit-checks.mjs",
-    "prepare": "husky"
+    "prepare": "node -e \"const fs=require('node:fs');const path=require('node:path');const cp=require('node:child_process');const bin=path.join(process.cwd(),'node_modules','.bin',process.platform==='win32'?'husky.cmd':'husky');if(!fs.existsSync(bin))process.exit(0);const r=cp.spawnSync(bin,{stdio:'inherit'});if(r.error)throw r.error;process.exit(r.status??0);\""
   },
   "repository": {
     "type": "git",
