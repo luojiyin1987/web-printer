@@ -22,6 +22,14 @@ const {
 const config = getConfig();
 const app = express();
 
+const PRINTER_CACHE_TTL_MS = 3000;
+const JOB_CACHE_TTL_MS = 1500;
+const PRINTER_JOBS_CACHE_MAX_ENTRIES = 128;
+const PRINTER_JOBS_CACHE_IDLE_TTL_MS = 10 * 60 * 1000;
+
+const printerListCache = createTimedCache(PRINTER_CACHE_TTL_MS);
+const printerJobsCaches = new Map();
+
 const upload = multer({
   dest: config.uploadDir,
   limits: {
@@ -40,6 +48,101 @@ function sanitizeCupsString(value, maxLength) {
   const truncated = str.length > maxLength ? str.slice(0, maxLength) : str;
   // Strip control characters (except tab, newline, carriage return)
   return truncated.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
+
+function createTimedCache(ttlMs) {
+  return {
+    ttlMs,
+    value: undefined,
+    expiresAt: 0,
+    inFlight: null,
+    lastAccessAt: Date.now(),
+  };
+}
+
+async function getCachedValue(cache, loader) {
+  cache.lastAccessAt = Date.now();
+
+  if (Date.now() < cache.expiresAt) {
+    return cache.value;
+  }
+
+  if (cache.inFlight) {
+    return cache.inFlight;
+  }
+
+  cache.inFlight = (async () => {
+    const value = await loader();
+    cache.value = value;
+    cache.expiresAt = Date.now() + cache.ttlMs;
+    return value;
+  })();
+
+  try {
+    return await cache.inFlight;
+  } finally {
+    cache.inFlight = null;
+  }
+}
+
+function getPrinterJobsCache(printerName) {
+  cleanupPrinterJobsCaches();
+
+  if (!printerJobsCaches.has(printerName)) {
+    printerJobsCaches.set(printerName, createTimedCache(JOB_CACHE_TTL_MS));
+  }
+
+  const cache = printerJobsCaches.get(printerName);
+  cache.lastAccessAt = Date.now();
+  return cache;
+}
+
+function cleanupPrinterJobsCaches() {
+  const now = Date.now();
+
+  for (const [printerName, cache] of printerJobsCaches.entries()) {
+    if (cache.inFlight) {
+      continue;
+    }
+
+    if (now - cache.lastAccessAt > PRINTER_JOBS_CACHE_IDLE_TTL_MS) {
+      printerJobsCaches.delete(printerName);
+    }
+  }
+
+  if (printerJobsCaches.size <= PRINTER_JOBS_CACHE_MAX_ENTRIES) {
+    return;
+  }
+
+  const removableEntries = Array.from(printerJobsCaches.entries())
+    .filter(([, cache]) => !cache.inFlight)
+    .sort((left, right) => left[1].lastAccessAt - right[1].lastAccessAt);
+
+  while (
+    printerJobsCaches.size > PRINTER_JOBS_CACHE_MAX_ENTRIES &&
+    removableEntries.length > 0
+  ) {
+    const [printerName] = removableEntries.shift();
+    printerJobsCaches.delete(printerName);
+  }
+}
+
+function invalidateCache(cache) {
+  cache.value = undefined;
+  cache.expiresAt = 0;
+}
+
+function invalidatePrinterState(printerName) {
+  invalidateCache(printerListCache);
+
+  if (!printerName) {
+    return;
+  }
+
+  const jobsCache = printerJobsCaches.get(printerName);
+  if (jobsCache) {
+    invalidateCache(jobsCache);
+  }
 }
 
 async function cleanupOldUploads(config) {
@@ -96,7 +199,9 @@ app.get(
 app.get(
   "/api/printers",
   asyncRoute(async (_request, response) => {
-    const printers = await listPrinters(config);
+    const printers = await getCachedValue(printerListCache, () =>
+      listPrinters(config)
+    );
     response.json({ printers });
   })
 );
@@ -104,7 +209,10 @@ app.get(
 app.get(
   "/api/printers/:printerName/jobs",
   asyncRoute(async (request, response) => {
-    const jobs = await getJobs(config, request.params.printerName);
+    const jobs = await getCachedValue(
+      getPrinterJobsCache(request.params.printerName),
+      () => getJobs(config, request.params.printerName)
+    );
     response.json({ jobs });
   })
 );
@@ -158,6 +266,8 @@ app.post(
         requestingUser: sanitizeCupsString(request.body.requestingUser, 64),
       });
 
+      invalidatePrinterState(request.params.printerName);
+
       response.status(201).json({
         ...result,
         pageRangesText: pageRanges.length > 0 ? formatPageRanges(pageRanges) : "",
@@ -181,6 +291,7 @@ app.post(
       request.params.printerName,
       request.params.jobId
     );
+    invalidatePrinterState(request.params.printerName);
     response.json(result);
   })
 );
@@ -217,6 +328,7 @@ async function start() {
     cleanupOldPreviews(config).catch((error) => {
       console.error("Periodic preview cleanup failed:", error);
     });
+    cleanupPrinterJobsCaches();
   }, 10 * 60 * 1000);
 
   app.listen(config.port, config.host, () => {

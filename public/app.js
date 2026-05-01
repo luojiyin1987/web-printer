@@ -5,6 +5,29 @@ const state = {
   officePreviewAvailable: false,
   officeExtensions: [],
   previewToken: 0,
+  hasActiveJobs: false,
+};
+
+const POLL_INTERVALS = {
+  printersVisibleMs: 30000,
+  printersHiddenMs: 180000,
+  jobsBusyVisibleMs: 5000,
+  jobsIdleVisibleMs: 15000,
+  pollBackoffMaxMs: 120000,
+  jitterRatio: 0.15,
+};
+
+const pollers = {
+  printers: {
+    timerId: null,
+    failureCount: 0,
+    inFlight: null,
+  },
+  jobs: {
+    timerId: null,
+    failureCount: 0,
+    inFlight: null,
+  },
 };
 
 const dom = {
@@ -204,6 +227,77 @@ async function requestJson(url, options) {
   return payload;
 }
 
+function isPageVisible() {
+  return document.visibilityState === "visible";
+}
+
+function applyJitter(delayMs) {
+  const delta = Math.round(delayMs * POLL_INTERVALS.jitterRatio);
+  const min = Math.max(1000, delayMs - delta);
+  const max = Math.max(min, delayMs + delta);
+  return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+function backoffDelay(delayMs, failureCount) {
+  return Math.min(
+    POLL_INTERVALS.pollBackoffMaxMs,
+    delayMs * 2 ** Math.min(failureCount, 5)
+  );
+}
+
+function clearPollTimer(poller) {
+  if (poller.timerId) {
+    clearTimeout(poller.timerId);
+    poller.timerId = null;
+  }
+}
+
+function getPrinterPollDelay() {
+  return isPageVisible()
+    ? POLL_INTERVALS.printersVisibleMs
+    : POLL_INTERVALS.printersHiddenMs;
+}
+
+function getJobsPollDelay() {
+  if (!isPageVisible() || !state.selectedPrinter) {
+    return null;
+  }
+
+  return state.hasActiveJobs
+    ? POLL_INTERVALS.jobsBusyVisibleMs
+    : POLL_INTERVALS.jobsIdleVisibleMs;
+}
+
+function schedulePrintersPoll(delayMs = getPrinterPollDelay()) {
+  clearPollTimer(pollers.printers);
+  pollers.printers.timerId = window.setTimeout(() => {
+    refreshPrintersInBackground().catch((error) => {
+      console.error("Background printer refresh failed:", error);
+    });
+  }, applyJitter(delayMs));
+}
+
+function scheduleJobsPoll(delayMs = getJobsPollDelay()) {
+  clearPollTimer(pollers.jobs);
+
+  if (!Number.isFinite(delayMs) || delayMs <= 0) {
+    return;
+  }
+
+  pollers.jobs.timerId = window.setTimeout(() => {
+    refreshJobsInBackground().catch((error) => {
+      console.error("Background job refresh failed:", error);
+    });
+  }, applyJitter(delayMs));
+}
+
+function resetPollingSchedules() {
+  pollers.printers.failureCount = 0;
+  pollers.jobs.failureCount = 0;
+  schedulePrintersPoll();
+  scheduleJobsPoll();
+}
+
 function renderPrinterSelect() {
   if (state.printers.length === 0) {
     dom.printerSelect.innerHTML = '<option value="">暂无打印机</option>';
@@ -265,9 +359,15 @@ function renderPrinters() {
   dom.printerList.querySelectorAll("[data-printer-name]").forEach((element) => {
     element.addEventListener("click", () => {
       state.selectedPrinter = element.dataset.printerName;
+      state.hasActiveJobs = false;
       renderPrinterSelect();
       renderPrinters();
-      loadJobs().catch(handleError);
+      syncPrintOptions();
+      loadJobs()
+        .then(() => {
+          scheduleJobsPoll();
+        })
+        .catch(handleError);
     });
   });
 }
@@ -333,33 +433,134 @@ async function loadConfig() {
     : [];
 }
 
-async function loadPrinters() {
-  const payload = await requestJson("/api/printers");
-  state.printers = payload.printers || [];
+async function loadPrinters(options = {}) {
+  const { refreshJobsForSelectionChange = true } = options;
 
-  if (
-    !state.selectedPrinter ||
-    !state.printers.some((printer) => printer.name === state.selectedPrinter)
-  ) {
-    state.selectedPrinter = state.printers[0]?.name || null;
+  if (pollers.printers.inFlight) {
+    return pollers.printers.inFlight;
   }
 
-  renderPrinterSelect();
-  renderPrinters();
-  syncPrintOptions();
-  await loadJobs();
+  pollers.printers.inFlight = (async () => {
+    const previousSelectedPrinter = state.selectedPrinter;
+    const payload = await requestJson("/api/printers");
+    state.printers = payload.printers || [];
+
+    if (
+      !state.selectedPrinter ||
+      !state.printers.some((printer) => printer.name === state.selectedPrinter)
+    ) {
+      state.selectedPrinter = state.printers[0]?.name || null;
+    }
+
+    renderPrinterSelect();
+    renderPrinters();
+    syncPrintOptions();
+
+    if (
+      refreshJobsForSelectionChange &&
+      previousSelectedPrinter !== state.selectedPrinter
+    ) {
+      await loadJobs();
+    } else if (previousSelectedPrinter !== state.selectedPrinter) {
+      state.hasActiveJobs = false;
+      renderJobs([]);
+      await loadJobs();
+    } else if (!state.selectedPrinter) {
+      state.hasActiveJobs = false;
+      renderJobs([]);
+    }
+
+    return state.printers;
+  })();
+
+  try {
+    return await pollers.printers.inFlight;
+  } finally {
+    pollers.printers.inFlight = null;
+  }
 }
 
 async function loadJobs() {
-  if (!state.selectedPrinter) {
+  const printerName = state.selectedPrinter;
+
+  if (!printerName) {
+    state.hasActiveJobs = false;
     renderJobs([]);
+    return [];
+  }
+
+  if (pollers.jobs.inFlight?.printerName === printerName) {
+    return pollers.jobs.inFlight.promise;
+  }
+
+  const promise = (async () => {
+    const payload = await requestJson(
+      `/api/printers/${encodeURIComponent(printerName)}/jobs`
+    );
+    const jobs = payload.jobs || [];
+
+    if (state.selectedPrinter === printerName) {
+      state.hasActiveJobs = jobs.length > 0;
+      renderJobs(jobs);
+    }
+
+    return jobs;
+  })();
+
+  pollers.jobs.inFlight = {
+    printerName,
+    promise,
+  };
+
+  try {
+    return await promise;
+  } finally {
+    if (pollers.jobs.inFlight?.promise === promise) {
+      pollers.jobs.inFlight = null;
+    }
+  }
+}
+
+async function refreshAllNow() {
+  await loadPrinters({ refreshJobsForSelectionChange: false });
+  await loadJobs();
+  resetPollingSchedules();
+}
+
+async function refreshPrintersInBackground() {
+  try {
+    await loadPrinters({ refreshJobsForSelectionChange: false });
+    pollers.printers.failureCount = 0;
+  } catch (error) {
+    pollers.printers.failureCount += 1;
+    throw error;
+  } finally {
+    schedulePrintersPoll(
+      backoffDelay(getPrinterPollDelay(), pollers.printers.failureCount)
+    );
+  }
+}
+
+async function refreshJobsInBackground() {
+  const baseDelay = getJobsPollDelay();
+
+  if (!Number.isFinite(baseDelay) || baseDelay <= 0) {
+    clearPollTimer(pollers.jobs);
     return;
   }
 
-  const payload = await requestJson(
-    `/api/printers/${encodeURIComponent(state.selectedPrinter)}/jobs`
-  );
-  renderJobs(payload.jobs || []);
+  try {
+    await loadJobs();
+    pollers.jobs.failureCount = 0;
+  } catch (error) {
+    pollers.jobs.failureCount += 1;
+    throw error;
+  } finally {
+    const nextDelay = getJobsPollDelay();
+    if (Number.isFinite(nextDelay) && nextDelay > 0) {
+      scheduleJobsPoll(backoffDelay(nextDelay, pollers.jobs.failureCount));
+    }
+  }
 }
 
 async function submitPrint(event) {
@@ -398,7 +599,8 @@ async function submitPrint(event) {
     renderPrinterSelect();
     syncPrintOptions();
     clearPreview("选择文件后，这里会显示预览。");
-    await loadJobs();
+    await Promise.all([loadJobs(), loadPrinters()]);
+    resetPollingSchedules();
   } finally {
     dom.submitButton.disabled = false;
   }
@@ -417,7 +619,8 @@ async function cancelJob(jobId) {
       method: "POST",
     }
   );
-  await loadJobs();
+  await Promise.all([loadJobs(), loadPrinters()]);
+  resetPollingSchedules();
 }
 
 function handleError(error) {
@@ -426,19 +629,28 @@ function handleError(error) {
 }
 
 dom.refreshPrinters.addEventListener("click", () => {
-  loadPrinters().catch(handleError);
+  refreshAllNow().catch(handleError);
 });
 
 dom.refreshJobs.addEventListener("click", () => {
-  loadJobs().catch(handleError);
+  loadJobs()
+    .then(() => {
+      scheduleJobsPoll();
+    })
+    .catch(handleError);
 });
 
 dom.printerSelect.addEventListener("change", () => {
   state.selectedPrinter = dom.printerSelect.value;
+  state.hasActiveJobs = false;
   renderPrinterSelect();
   renderPrinters();
   syncPrintOptions();
-  loadJobs().catch(handleError);
+  loadJobs()
+    .then(() => {
+      scheduleJobsPoll();
+    })
+    .catch(handleError);
 });
 
 dom.printForm.addEventListener("submit", (event) => {
@@ -450,7 +662,19 @@ dom.documentInput.addEventListener("change", () => {
 });
 
 window.addEventListener("beforeunload", () => {
+  clearPollTimer(pollers.printers);
+  clearPollTimer(pollers.jobs);
   revokePreviewUrl();
 });
 
-Promise.all([loadConfig(), loadPrinters()]).catch(handleError);
+document.addEventListener("visibilitychange", () => {
+  if (isPageVisible()) {
+    refreshAllNow().catch(handleError);
+    return;
+  }
+
+  schedulePrintersPoll();
+  clearPollTimer(pollers.jobs);
+});
+
+Promise.all([loadConfig(), refreshAllNow()]).catch(handleError);
