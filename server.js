@@ -13,22 +13,22 @@ const {
   OFFICE_EXTENSIONS,
   resolvePreviewFile,
 } = require("./lib/preview");
+const { formatPageRanges, parseCopies, parsePageRanges } = require("./lib/print-options");
 const {
-  formatPageRanges,
-  parseCopies,
-  parsePageRanges,
-} = require("./lib/print-options");
+  printerListCache,
+  getCachedValue,
+  getPrinterJobsCache,
+  cleanupPrinterJobsCaches,
+  invalidatePrinterState,
+} = require("./lib/cache-manager");
+
+const UPLOAD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const MAINTENANCE_INTERVAL_MS = 10 * 60 * 1000;
+const JOB_ID_PATTERN = /^\d+$/;
+const PUBLIC_DIR = path.join(__dirname, "public");
 
 const config = getConfig();
 const app = express();
-
-const PRINTER_CACHE_TTL_MS = 3000;
-const JOB_CACHE_TTL_MS = 1500;
-const PRINTER_JOBS_CACHE_MAX_ENTRIES = 128;
-const PRINTER_JOBS_CACHE_IDLE_TTL_MS = 10 * 60 * 1000;
-
-const printerListCache = createTimedCache(PRINTER_CACHE_TTL_MS);
-const printerJobsCaches = new Map();
 
 const upload = multer({
   dest: config.uploadDir,
@@ -46,129 +46,38 @@ function asyncRoute(handler) {
 function sanitizeCupsString(value, maxLength) {
   const str = String(value || "").trim();
   const truncated = str.length > maxLength ? str.slice(0, maxLength) : str;
-  // Strip control characters (except tab, newline, carriage return)
   return truncated.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
 }
 
-function createTimedCache(ttlMs) {
-  return {
-    ttlMs,
-    value: undefined,
-    expiresAt: 0,
-    inFlight: null,
-    lastAccessAt: Date.now(),
-  };
-}
-
-async function getCachedValue(cache, loader) {
-  cache.lastAccessAt = Date.now();
-
-  if (Date.now() < cache.expiresAt) {
-    return cache.value;
-  }
-
-  if (cache.inFlight) {
-    return cache.inFlight;
-  }
-
-  cache.inFlight = (async () => {
-    const value = await loader();
-    cache.value = value;
-    cache.expiresAt = Date.now() + cache.ttlMs;
-    return value;
-  })();
-
-  try {
-    return await cache.inFlight;
-  } finally {
-    cache.inFlight = null;
-  }
-}
-
-function getPrinterJobsCache(printerName) {
-  cleanupPrinterJobsCaches();
-
-  if (!printerJobsCaches.has(printerName)) {
-    printerJobsCaches.set(printerName, createTimedCache(JOB_CACHE_TTL_MS));
-  }
-
-  const cache = printerJobsCaches.get(printerName);
-  cache.lastAccessAt = Date.now();
-  return cache;
-}
-
-function cleanupPrinterJobsCaches() {
-  const now = Date.now();
-
-  for (const [printerName, cache] of printerJobsCaches.entries()) {
-    if (cache.inFlight) {
-      continue;
-    }
-
-    if (now - cache.lastAccessAt > PRINTER_JOBS_CACHE_IDLE_TTL_MS) {
-      printerJobsCaches.delete(printerName);
-    }
-  }
-
-  if (printerJobsCaches.size <= PRINTER_JOBS_CACHE_MAX_ENTRIES) {
+async function removeFileIfPresent(filePath) {
+  if (!filePath) {
     return;
   }
 
-  const removableEntries = Array.from(printerJobsCaches.entries())
-    .filter(([, cache]) => !cache.inFlight)
-    .sort((left, right) => left[1].lastAccessAt - right[1].lastAccessAt);
-
-  while (
-    printerJobsCaches.size > PRINTER_JOBS_CACHE_MAX_ENTRIES &&
-    removableEntries.length > 0
-  ) {
-    const [printerName] = removableEntries.shift();
-    printerJobsCaches.delete(printerName);
-  }
+  await fs.rm(filePath, { force: true }).catch(() => {});
 }
 
-function invalidateCache(cache) {
-  cache.value = undefined;
-  cache.expiresAt = 0;
-}
-
-function invalidatePrinterState(printerName) {
-  invalidateCache(printerListCache);
-
-  if (!printerName) {
-    return;
-  }
-
-  const jobsCache = printerJobsCaches.get(printerName);
-  if (jobsCache) {
-    invalidateCache(jobsCache);
-  }
-}
-
-async function cleanupOldUploads(config) {
+async function cleanupOldUploads() {
   const entries = await fs.readdir(config.uploadDir, { withFileTypes: true });
   const now = Date.now();
-  const maxAge = 24 * 60 * 60 * 1000; // 24 hours
 
   await Promise.all(
     entries
       .filter((entry) => entry.isFile())
       .map(async (entry) => {
         const target = path.join(config.uploadDir, entry.name);
+
         try {
           const stat = await fs.stat(target);
-          if (now - stat.mtimeMs > maxAge) {
+          if (now - stat.mtimeMs > UPLOAD_MAX_AGE_MS) {
             await fs.rm(target, { force: true });
           }
         } catch (_error) {
-          // ignore
+          // ignore cleanup races
         }
       })
   );
 }
-
-app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
 
 async function getOfficePreviewConfig() {
   try {
@@ -185,159 +94,192 @@ async function getOfficePreviewConfig() {
   }
 }
 
-app.get(
-  "/api/config",
-  asyncRoute(async (_request, response) => {
-    const officePreviewConfig = await getOfficePreviewConfig();
-    response.json({
-      cupsServer: redactUrl(config.cupsServerUrl),
-      ...officePreviewConfig,
-    });
-  })
-);
+async function getCachedPrinters() {
+  return getCachedValue(printerListCache, () => listPrinters(config));
+}
 
-app.get(
-  "/api/printers",
-  asyncRoute(async (_request, response) => {
-    const printers = await getCachedValue(printerListCache, () =>
-      listPrinters(config)
-    );
-    response.json({ printers });
-  })
-);
+async function getCachedPrinterJobs(printerName) {
+  return getCachedValue(getPrinterJobsCache(printerName), () =>
+    getJobs(config, printerName)
+  );
+}
 
-app.get(
-  "/api/printers/:printerName/jobs",
-  asyncRoute(async (request, response) => {
-    const jobs = await getCachedValue(
-      getPrinterJobsCache(request.params.printerName),
-      () => getJobs(config, request.params.printerName)
-    );
-    response.json({ jobs });
-  })
-);
+function buildPrintJobRequest(request) {
+  return {
+    copies: parseCopies(request.body.copies),
+    pageRanges: parsePageRanges(request.body.pageRanges),
+    originalname: request.file.originalname,
+    jobName: sanitizeCupsString(request.body.jobName, 128),
+    requestingUser: sanitizeCupsString(request.body.requestingUser, 64),
+  };
+}
 
-app.post(
-  "/api/previews",
-  upload.single("document"),
-  asyncRoute(async (request, response) => {
-    try {
-      const result = await createOfficePreview(config, request.file);
-      response.status(201).json(result);
-    } catch (error) {
-      if (request.file?.path) {
-        await fs.rm(request.file.path, { force: true }).catch(() => {});
-      }
+function sendBadRequest(response, message) {
+  response.status(400).json({ error: message });
+}
 
-      throw error;
-    }
-  })
-);
-
-app.get(
-  "/api/previews/:previewId/file",
-  asyncRoute(async (request, response) => {
-    const previewPath = await resolvePreviewFile(config, request.params.previewId);
-    response.type("application/pdf");
-    response.sendFile(previewPath);
-  })
-);
-
-app.post(
-  "/api/printers/:printerName/print",
-  upload.single("document"),
-  asyncRoute(async (request, response) => {
-    if (!request.file) {
-      response.status(400).json({ error: "document is required." });
-      return;
-    }
-
-    const copies = parseCopies(request.body.copies);
-    const pageRanges = parsePageRanges(request.body.pageRanges);
-
-    try {
-      const buffer = await fs.readFile(request.file.path);
-      const result = await printFile(config, request.params.printerName, {
-        buffer,
-        copies,
-        pageRanges,
-        originalname: request.file.originalname,
-        jobName: sanitizeCupsString(request.body.jobName, 128),
-        requestingUser: sanitizeCupsString(request.body.requestingUser, 64),
-      });
-
-      invalidatePrinterState(request.params.printerName);
-
-      response.status(201).json({
-        ...result,
-        pageRangesText: pageRanges.length > 0 ? formatPageRanges(pageRanges) : "",
-      });
-    } finally {
-      await fs.rm(request.file.path, { force: true });
-    }
-  })
-);
-
-app.post(
-  "/api/printers/:printerName/jobs/:jobId/cancel",
-  asyncRoute(async (request, response) => {
-    if (!/^\d+$/.test(request.params.jobId)) {
-      response.status(400).json({ error: "jobId must be a positive integer." });
-      return;
-    }
-
-    const result = await cancelJob(
-      config,
-      request.params.printerName,
-      request.params.jobId
-    );
-    invalidatePrinterState(request.params.printerName);
-    response.json(result);
-  })
-);
-
-app.use((error, _request, response, _next) => {
+function resolveErrorStatus(error) {
   const message = error?.message || "Internal server error.";
   const normalizedMessage = message.toLowerCase();
-  const status =
+
+  return (
     error?.statusCode ||
     (normalizedMessage.includes("file too large") ||
     normalizedMessage.includes("document is required")
       ? 400
-      : 500);
+      : 500)
+  );
+}
 
-  response.status(status).json({ error: message });
-});
+async function handleGetConfig(_request, response) {
+  const officePreviewConfig = await getOfficePreviewConfig();
+  response.json({
+    cupsServer: redactUrl(config.cupsServerUrl),
+    ...officePreviewConfig,
+  });
+}
 
-async function start() {
+async function handleListPrinters(_request, response) {
+  const printers = await getCachedPrinters();
+  response.json({ printers });
+}
+
+async function handleListJobs(request, response) {
+  const jobs = await getCachedPrinterJobs(request.params.printerName);
+  response.json({ jobs });
+}
+
+async function handleCancelJob(request, response) {
+  const { printerName, jobId } = request.params;
+
+  if (!JOB_ID_PATTERN.test(jobId)) {
+    sendBadRequest(response, "jobId must be a positive integer.");
+    return;
+  }
+
+  const result = await cancelJob(config, printerName, jobId);
+  invalidatePrinterState(printerName);
+  response.json(result);
+}
+
+async function handleCreatePreview(request, response) {
+  try {
+    const result = await createOfficePreview(config, request.file);
+    response.status(201).json(result);
+  } catch (error) {
+    await removeFileIfPresent(request.file?.path);
+    throw error;
+  }
+}
+
+async function handleGetPreviewFile(request, response) {
+  const previewPath = await resolvePreviewFile(config, request.params.previewId);
+  response.type("application/pdf");
+  response.sendFile(previewPath);
+}
+
+async function handlePrintDocument(request, response) {
+  if (!request.file) {
+    sendBadRequest(response, "document is required.");
+    return;
+  }
+
+  const { printerName } = request.params;
+  const printRequest = buildPrintJobRequest(request);
+
+  try {
+    const buffer = await fs.readFile(request.file.path);
+    const result = await printFile(config, printerName, {
+      buffer,
+      ...printRequest,
+    });
+
+    invalidatePrinterState(printerName);
+
+    response.status(201).json({
+      ...result,
+      pageRangesText:
+        printRequest.pageRanges.length > 0
+          ? formatPageRanges(printRequest.pageRanges)
+          : "",
+    });
+  } finally {
+    await removeFileIfPresent(request.file.path);
+  }
+}
+
+function handleError(error, _request, response, _next) {
+  const message = error?.message || "Internal server error.";
+  response.status(resolveErrorStatus(error)).json({ error: message });
+}
+
+function registerMiddleware() {
+  app.use(express.json());
+  app.use(express.static(PUBLIC_DIR));
+}
+
+function registerRoutes() {
+  app.get("/api/config", asyncRoute(handleGetConfig));
+  app.get("/api/printers", asyncRoute(handleListPrinters));
+  app.get("/api/printers/:printerName/jobs", asyncRoute(handleListJobs));
+  app.post(
+    "/api/printers/:printerName/jobs/:jobId/cancel",
+    asyncRoute(handleCancelJob)
+  );
+  app.post("/api/previews", upload.single("document"), asyncRoute(handleCreatePreview));
+  app.get("/api/previews/:previewId/file", asyncRoute(handleGetPreviewFile));
+  app.post(
+    "/api/printers/:printerName/print",
+    upload.single("document"),
+    asyncRoute(handlePrintDocument)
+  );
+}
+
+async function ensureRuntimeDirectories() {
   await fs.mkdir(config.uploadDir, { recursive: true });
   await fs.mkdir(config.previewDir, { recursive: true });
+}
 
-  await cleanupOldUploads(config).catch((error) => {
+async function runStartupCleanup() {
+  await cleanupOldUploads().catch((error) => {
     console.error("Failed to clean up old uploads:", error);
   });
   await cleanupOldPreviews(config).catch((error) => {
     console.error("Failed to clean up old previews:", error);
   });
+}
 
-  // Periodic cleanup every 10 minutes
-  setInterval(() => {
-    cleanupOldUploads(config).catch((error) => {
+function scheduleMaintenance() {
+  setTimeout(async () => {
+    await cleanupOldUploads().catch((error) => {
       console.error("Periodic upload cleanup failed:", error);
     });
-    cleanupOldPreviews(config).catch((error) => {
+    await cleanupOldPreviews(config).catch((error) => {
       console.error("Periodic preview cleanup failed:", error);
     });
     cleanupPrinterJobsCaches();
-  }, 10 * 60 * 1000);
+    scheduleMaintenance();
+  }, MAINTENANCE_INTERVAL_MS);
+}
 
-  app.listen(config.port, config.host, () => {
-    console.log(
-      `web-printer listening on http://${config.host}:${config.port} -> ${redactUrl(
-        config.cupsServerUrl
-      )}`
-    );
-  });
+function logStartup() {
+  console.log(
+    `web-printer listening on http://${config.host}:${config.port} -> ${redactUrl(
+      config.cupsServerUrl
+    )}`
+  );
+}
+
+async function start() {
+  registerMiddleware();
+  registerRoutes();
+  app.use(handleError);
+
+  await ensureRuntimeDirectories();
+  await runStartupCleanup();
+  scheduleMaintenance();
+
+  app.listen(config.port, config.host, logStartup);
 }
 
 start().catch((error) => {
