@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 
 import { normalizeBaseUrl } from "../lib/config.js";
 import { buildPrinterPath, httpUrlToIppUrl, ippUriToHttpUrl } from "../lib/cups.js";
-import { isOfficeDocument } from "../lib/preview.js";
+import { cleanupOldPreviews, isOfficeDocument } from "../lib/preview.js";
 import { formatPageRanges, parsePageRanges } from "../lib/print-options.js";
 
 const cupsUrl = normalizeBaseUrl("192.168.1.50");
@@ -26,6 +26,7 @@ assert.equal(formatPageRanges([[1, 3], [5, 5], [7, 8]]), "1-3,5,7-8");
 assert.equal(isOfficeDocument("report.docx"), true);
 assert.equal(isOfficeDocument("sheet.xlsx"), true);
 assert.equal(isOfficeDocument("photo.jpg"), false);
+assert.equal(typeof cleanupOldPreviews, "function");
 
 execFileSync(
   process.execPath,
