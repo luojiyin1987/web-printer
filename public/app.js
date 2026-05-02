@@ -522,8 +522,13 @@ async function loadJobs() {
 }
 
 async function refreshAllNow() {
+  const previousSelectedPrinter = state.selectedPrinter;
   await loadPrinters({ refreshJobsForSelectionChange: false });
-  await loadJobs();
+
+  if (previousSelectedPrinter === state.selectedPrinter) {
+    await loadJobs();
+  }
+
   resetPollingSchedules();
 }
 

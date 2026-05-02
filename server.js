@@ -9,6 +9,7 @@ const { cancelJob, getJobs, listPrinters, printFile } = require("./lib/cups");
 const {
   cleanupOldPreviews,
   createOfficePreview,
+  isOfficeDocument,
   isSofficeAvailable,
   OFFICE_EXTENSIONS,
   resolvePreviewFile,
@@ -29,11 +30,28 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 
 const config = getConfig();
 const app = express();
-
-const upload = multer({
+let maintenanceTimer = null;
+const uploadOptions = {
   dest: config.uploadDir,
   limits: {
     fileSize: config.uploadLimitBytes,
+  },
+};
+
+const upload = multer(uploadOptions);
+const officeUpload = multer({
+  ...uploadOptions,
+  fileFilter: (_request, file, callback) => {
+    if (isOfficeDocument(file.originalname)) {
+      callback(null, true);
+      return;
+    }
+
+    const error = new Error(
+      "Only Office documents can use server-side conversion preview."
+    );
+    error.statusCode = 400;
+    callback(error);
   },
 });
 
@@ -226,7 +244,11 @@ function registerRoutes() {
     "/api/printers/:printerName/jobs/:jobId/cancel",
     asyncRoute(handleCancelJob)
   );
-  app.post("/api/previews", upload.single("document"), asyncRoute(handleCreatePreview));
+  app.post(
+    "/api/previews",
+    officeUpload.single("document"),
+    asyncRoute(handleCreatePreview)
+  );
   app.get("/api/previews/:previewId/file", asyncRoute(handleGetPreviewFile));
   app.post(
     "/api/printers/:printerName/print",
@@ -250,7 +272,7 @@ async function runStartupCleanup() {
 }
 
 function scheduleMaintenance() {
-  setTimeout(async () => {
+  maintenanceTimer = setTimeout(async () => {
     await cleanupOldUploads().catch((error) => {
       console.error("Periodic upload cleanup failed:", error);
     });
@@ -262,12 +284,50 @@ function scheduleMaintenance() {
   }, MAINTENANCE_INTERVAL_MS);
 }
 
+function stopMaintenance() {
+  if (maintenanceTimer) {
+    clearTimeout(maintenanceTimer);
+    maintenanceTimer = null;
+  }
+}
+
 function logStartup() {
   console.log(
     `web-printer listening on http://${config.host}:${config.port} -> ${redactUrl(
       config.cupsServerUrl
     )}`
   );
+}
+
+function registerShutdownHandlers(server) {
+  let shuttingDown = false;
+
+  function shutdown(signal) {
+    if (shuttingDown) {
+      return;
+    }
+
+    shuttingDown = true;
+    console.log(`${signal} received, shutting down gracefully.`);
+    stopMaintenance();
+
+    const forcedExitTimer = setTimeout(() => {
+      console.error("Forced exit after graceful shutdown timeout.");
+      process.exit(1);
+    }, 10000);
+
+    server.close(() => {
+      clearTimeout(forcedExitTimer);
+      process.exit(0);
+    });
+  }
+
+  process.on("SIGTERM", () => {
+    shutdown("SIGTERM");
+  });
+  process.on("SIGINT", () => {
+    shutdown("SIGINT");
+  });
 }
 
 async function start() {
@@ -279,7 +339,8 @@ async function start() {
   await runStartupCleanup();
   scheduleMaintenance();
 
-  app.listen(config.port, config.host, logStartup);
+  const server = app.listen(config.port, config.host, logStartup);
+  registerShutdownHandlers(server);
 }
 
 start().catch((error) => {
