@@ -314,7 +314,7 @@ function registerShutdownHandlers(server) {
     const forcedExitTimer = setTimeout(() => {
       console.error("Forced exit after graceful shutdown timeout.");
       process.exit(1);
-    }, 10000);
+    }, config.shutdownGraceMs);
 
     server.close((error) => {
       clearTimeout(forcedExitTimer);
