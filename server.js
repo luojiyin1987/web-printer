@@ -316,10 +316,18 @@ function registerShutdownHandlers(server) {
       process.exit(1);
     }, 10000);
 
-    server.close(() => {
+    server.close((error) => {
       clearTimeout(forcedExitTimer);
+
+      if (error) {
+        console.error("Graceful shutdown failed:", error);
+        process.exit(1);
+        return;
+      }
+
       process.exit(0);
     });
+    server.closeIdleConnections();
   }
 
   process.on("SIGTERM", () => {
