@@ -22,8 +22,8 @@
   - 并发安全：清理时跳过 `inFlight` 中的缓存条目
 - **优雅关闭机制**：`registerShutdownHandlers`
   - 监听 SIGTERM / SIGINT，停止 maintenance timer，调用 `server.close()` 等待活跃请求完成
-  - 10 秒强制退出兜底，防止连接挂起导致进程无法终止
-  - Node 18+ 兼容：调用 `server.closeIdleConnections?.()` 主动关闭空闲 keep-alive 连接，加速关闭流程
+  - 可配置强制退出兜底时间：`SHUTDOWN_GRACE_MS`（默认 10 秒），防止连接挂起导致进程无法终止
+  - 调用 `server.closeIdleConnections()` 主动关闭空闲 keep-alive 连接，加速关闭流程
 
 ### 变更
 
@@ -37,6 +37,11 @@
   - 本轮完成后才开始下一轮计时，严格串行
 - **`/api/previews` 路由优化**：增加 multer `fileFilter`
   - 非 Office 文件在写入磁盘前即被拒绝，避免产生垃圾临时文件
+- **IPP 请求超时优化**：`lib/cups.js` 的 `execute()` 在收到响应后主动清理 `setTimeout` timer
+  - 避免请求已成功但 timer 仍挂到超时时间才无意义触发
+- **`shutdownGraceMs` 独立配置**：`lib/config.js`
+  - 不再与 `sofficeTimeoutMs` 隐性绑定，用户可独立控制优雅关闭超时
+  - Docker/K8s 场景下可按 orchestrator 容忍时间精确配置
 
 ### 修复
 
