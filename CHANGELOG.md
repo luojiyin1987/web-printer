@@ -20,6 +20,10 @@
   - 按打印机 key 的 Map 缓存池，支持 LRU 淘汰（128 条上限）
   - 空闲超时清理：10 分钟无访问自动删除，防止内存泄漏
   - 并发安全：清理时跳过 `inFlight` 中的缓存条目
+- **优雅关闭机制**：`registerShutdownHandlers`
+  - 监听 SIGTERM / SIGINT，停止 maintenance timer，调用 `server.close()` 等待活跃请求完成
+  - 10 秒强制退出兜底，防止连接挂起导致进程无法终止
+  - Node 18+ 兼容：调用 `server.closeIdleConnections?.()` 主动关闭空闲 keep-alive 连接，加速关闭流程
 
 ### 变更
 
@@ -31,9 +35,13 @@
 - **定时清理机制**：`scheduleMaintenance` 从 `setInterval` 改为递归 `setTimeout`
   - 避免清理任务耗时超过间隔时产生堆积
   - 本轮完成后才开始下一轮计时，严格串行
+- **`/api/previews` 路由优化**：增加 multer `fileFilter`
+  - 非 Office 文件在写入磁盘前即被拒绝，避免产生垃圾临时文件
 
 ### 修复
 
-- 修复被动切换打印机（如后台轮询发现原打印机消失、自动 fallback）时，`hasActiveJobs` 状态滞后的问题
+- **被动切换打印机时 `hasActiveJobs` 状态滞后**
   - 旧行为：重置为 false 后等待下次轮询定时器触发才刷新
   - 新行为：被动切换后立即执行 `loadJobs()`，状态与 UI 同步更新
+- **`refreshAllNow` 重复请求修复**：打印机列表被动切换后，不再重复触发 `loadJobs()`，消除并发拉取同一队列的问题
+- **`server.close()` 错误处理修正**：恢复回调的 error 参数处理。根据 Node.js 官方文档，`net.Server.close()` 在 server 未监听时 callback 会收到 Error 参数
